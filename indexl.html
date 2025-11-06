@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Roblox Profile Checker</title>
+<style>
+body { background:#1c1c1c; color:#dcdcdc; font-family:monospace; padding:20px; }
+input,button { width:100%; padding:10px; margin-top:10px; border-radius:6px; border:none; font-size:16px; }
+button { background:#55aaff; color:#1c1c1c; cursor:pointer; }
+#output { margin-top:20px; background:#242424; padding:15px; border-radius:8px; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<h2>Roblox Profile Checker</h2>
+<input type="text" id="username" placeholder="Enter Roblox username">
+<button id="run">Check Profile</button>
+<div id="output"></div>
+
+<script>
+const PROXY = "https://your-worker.example.workers.dev?url="; // replace with your deployed worker
+const SANDHURST_GAME_ID = 270499015;
+
+async function proxyJson(url) {
+    const res = await fetch(PROXY + encodeURIComponent(url));
+    if (!res.ok) throw new Error(`Proxy fetch error ${res.status}`);
+    return res.json();
+}
+
+async function getUserId(username) {
+    const url = `https://users.roblox.com/v1/users/by-username/${username}`;
+    const data = await proxyJson(url);
+    return data.id;
+}
+
+async function getFriendCount(userId) {
+    const url = `https://friends.roblox.com/v1/users/${userId}/friends/count`;
+    const data = await proxyJson(url);
+    return data.count;
+}
+
+async function getGroupCount(userId) {
+    const url = `https://groups.roblox.com/v2/users/${userId}/groups/roles`;
+    const data = await proxyJson(url);
+    return data.data.length;
+}
+
+async function getAllUserBadges(userId){
+    let out = [], cursor = "";
+    while(true){
+        const url = `https://badges.roblox.com/v1/users/${userId}/badges?limit=100${cursor?"&cursor="+cursor:""}`;
+        const data = await proxyJson(url);
+        if(!data.data.length) break;
+        out = out.concat(data.data);
+        if(!data.nextPageCursor) break;
+        cursor = data.nextPageCursor;
+    }
+    return out;
+}
+
+async function getAllGameBadgeIds(gameId){
+    let ids = [], cursor = "";
+    while(true){
+        const url = `https://badges.roblox.com/v1/universes/${gameId}/badges?limit=100${cursor?"&cursor="+cursor:""}`;
+        const data = await proxyJson(url);
+        if(!data.data.length) break;
+        ids = ids.concat(data.data.map(b=>b.id));
+        if(!data.nextPageCursor) break;
+        cursor = data.nextPageCursor;
+    }
+    return ids;
+}
+
+document.getElementById("run").addEventListener("click", async ()=>{
+    const outEl = document.getElementById("output");
+    const username = document.getElementById("username").value.trim();
+    if(!username){ outEl.textContent="Enter username"; return; }
+    outEl.textContent="Fetching data...";
+
+    try{
+        const userId = await getUserId(username);
+        const [friends, groups, badges, gameBadgeIds] = await Promise.all([
+            getFriendCount(userId),
+            getGroupCount(userId),
+            getAllUserBadges(userId),
+            getAllGameBadgeIds(SANDHURST_GAME_ID)
+        ]);
+
+        const gameSet = new Set(gameBadgeIds);
+        const sandhurstBadges = badges.filter(b=>gameSet.has(b.id));
+
+        let msg = `Username: ${username}\nUserID: ${userId}\n\nFriends: ${friends}\nGroups: ${groups}\nTotal badges: ${badges.length}\n\n`;
+        if(sandhurstBadges.length){
+            msg += `✅ Found ${sandhurstBadges.length} Sandhurst badge(s):\n`;
+            sandhurstBadges.forEach(b=>msg+=`• ${b.name} (id: ${b.id})\n`);
+        } else {
+            msg += `❌ No Sandhurst badges found.\n`;
+        }
+
+        outEl.textContent = msg;
+
+    } catch(err){
+        outEl.textContent = "Error: "+err.message;
+        console.error(err);
+    }
+});
+</script>
+</body>
+</html>
