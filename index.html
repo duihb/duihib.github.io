@@ -56,91 +56,91 @@
 <div id="output"></div>
 
 <script>
-const SANDHURST_GAME_ID = 270499015;
+const backendURL = "https://roblox-backend-rugl.onrender.com";
 
-// Basic GET proxy-free fetch wrapper (assumes running in browser)
-async function fetchJSON(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP error ${res.status}: ${url}`);
+// Fetch wrapper
+async function fetchJSON(url, options) {
+  const res = await fetch(url, options);
+  if (!res.ok) throw new Error(`HTTP error! Status: ${res.status} at ${url}`);
   return res.json();
 }
 
-async function getUserByUsername(username) {
-  return fetchJSON(`https://users.roblox.com/v1/users/by-username/${encodeURIComponent(username)}`);
-}
-
-async function getFriendCount(userId) {
-  return fetchJSON(`https://friends.roblox.com/v1/users/${userId}/friends/count`);
-}
-
-async function getGroupRoles(userId) {
-  return fetchJSON(`https://groups.roblox.com/v2/users/${userId}/groups/roles`);
-}
-
-async function getAllUserBadges(userId) {
-  let badges = [], cursor = "";
-  while (true) {
-    const url = `https://badges.roblox.com/v1/users/${userId}/badges?limit=100${cursor ? "&cursor=" + cursor : ""}`;
-    const data = await fetchJSON(url);
-    if (!data?.data || data.data.length === 0) break;
-    badges = badges.concat(data.data);
-    if (!data.nextPageCursor) break;
-    cursor = data.nextPageCursor;
+// Safe fetch with error handling
+async function safeFetch(url, options) {
+  try {
+    return await fetchJSON(url, options);
+  } catch (e) {
+    console.error(`Error fetching ${url}:`, e);
+    return null;
   }
-  return badges;
 }
 
-async function getAllGameBadges(gameId) {
-  let badges = [], cursor = "";
-  while (true) {
-    const url = `https://badges.roblox.com/v1/universes/${gameId}/badges?limit=100${cursor ? "&cursor=" + cursor : ""}`;
-    const data = await fetchJSON(url);
-    if (!data?.data || data.data.length === 0) break;
-    badges = badges.concat(data.data);
-    if (!data.nextPageCursor) break;
-    cursor = data.nextPageCursor;
+// Fetch additional info (friends, badges, groups, etc.)
+async function fetchExtraInfo(userId) {
+  const friends = await safeFetch(`${backendURL}/api/friends/${userId}`);
+  const badges = await safeFetch(`${backendURL}/api/badges/${userId}`);
+  const presence = await safeFetch(`${backendURL}/api/presence/${userId}`);
+  const followers = await safeFetch(`${backendURL}/api/followers/${userId}`);
+  const groups = await safeFetch(`${backendURL}/api/groups/${userId}`);
+
+  let info = "\n\n";
+
+  info += `🔹 Friends Count: ${friends?.count ?? "Unable to fetch"}\n`;
+  info += `🔹 Followers: ${followers?.count ?? "Unable to fetch"}\n`;
+
+  info += `\n🔹 Badges (${badges?.data?.length ?? 0}):\n`;
+  if (badges?.data?.length > 0) {
+    badges.data.forEach(b => info += ` - ${b.name}\n`);
+  } else {
+    info += " - None\n";
   }
-  return badges;
+
+  info += `\n🔹 Presence: ${presence?.userPresences?.[0]?.userPresenceType === 0 ? "Offline" : "Online" ?? "Unable to fetch"}\n`;
+
+  info += `\n🔹 Groups (${groups?.data?.length ?? 0}):\n`;
+  if (groups?.data?.length > 0) {
+    groups.data.forEach(g => {
+      info += ` - ${g.group.name} (Role: ${g.role.name}, Members: ${g.group.memberCount})\n`;
+    });
+  } else {
+    info += " - None\n";
+  }
+
+  return info;
 }
 
+// Search button handler
 document.getElementById('searchBtn').addEventListener('click', async () => {
-  const output = document.getElementById('output');
   const username = document.getElementById('username').value.trim();
+  const output = document.getElementById('output');
   if (!username) { output.textContent = "Please enter a username."; return; }
+
   output.textContent = "Fetching info...";
 
   try {
-    const user = await getUserByUsername(username);
-    if (!user?.id) { output.textContent = "User not found."; return; }
-    const userId = user.id;
+    const userData = await fetchJSON(`${backendURL}/api/userid`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ usernames: [username] })
+    });
 
-    const [friends, groups, userBadges, gameBadges] = await Promise.all([
-      getFriendCount(userId),
-      getGroupRoles(userId),
-      getAllUserBadges(userId),
-      getAllGameBadges(SANDHURST_GAME_ID)
-    ]);
+    if (!userData?.data?.length) { output.textContent = "User not found."; return; }
 
-    const gameBadgeSet = new Set(gameBadges.map(b => b.id));
-    const sandhurstOwned = userBadges.filter(b => gameBadgeSet.has(b.id));
+    const userId = userData.data[0].id;
+    const userInfo = await fetchJSON(`${backendURL}/api/user/${userId}`);
+    if (userInfo?.error) { output.textContent = "Error fetching user info."; return; }
 
-    let msg = `🧾 Display Name: ${user.username}\n`;
-    msg += `🔢 User ID: ${userId}\n\n`;
-    msg += `🔹 Friends Count: ${friends?.count ?? 0}\n`;
-    msg += `🔹 Groups Count: ${groups?.data?.length ?? 0}\n`;
-    msg += `🔹 Total Badges Owned: ${userBadges.length}\n\n`;
+    let result = `🧾 Display Name: ${userInfo.displayName}\n`;
+    result += `🔢 User ID: ${userInfo.id}\n`;
+    result += `📄 Bio: ${userInfo.description || "None"}\n`;
+    result += `📅 Account Created: ${new Date(userInfo.created).toLocaleDateString()}`;
 
-    if (sandhurstOwned.length) {
-      msg += `✅ Sandhurst badge(s) found (${sandhurstOwned.length}):\n`;
-      sandhurstOwned.forEach(b => msg += ` - ${b.name} (id: ${b.id})\n`);
-    } else {
-      msg += `❌ No Sandhurst badges found.\n`;
-    }
+    const extra = await fetchExtraInfo(userId);
 
-    output.textContent = msg;
+    output.textContent = result + extra;
 
   } catch (err) {
-    output.textContent = `Error: ${err.message}\n(Remember Roblox API may block CORS in some browsers without a proxy)`;
+    output.textContent = `Error fetching data: ${err.message}`;
     console.error(err);
   }
 });
